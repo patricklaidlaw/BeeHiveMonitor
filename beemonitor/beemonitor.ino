@@ -1,6 +1,8 @@
 // This #include statement was automatically added by the Particle IDE.
 #include "Adafruit_SSD1306.h"
 #include "HX711ADC.h"
+#include <DS18B20.h>
+#include <math.h>
 
 /*********************************************************************
 This Bee Monitor uses a Monochrome OLEDs based on SSD1306 drivers for Initial Testing.
@@ -18,6 +20,8 @@ OLEDs: https://www.amazon.com/HiLetgo-Serial-128X64-Display-Color/dp/B06XRBTBTB/
 Photon Wireing Guide
 D0 -->OLED SDA
 D1 -->OLED SCL
+D4 -->OLDED Reset not actually used
+D3 -->DS18B20
 A0 -->HX711 SCK
 A1 -->HX711 DT
 
@@ -41,10 +45,35 @@ Adafruit_SSD1306 display(OLED_RESET);
 #error("Height incorrect, please fix Adafruit_SSD1306.h!");
 #endif
 
+/********************************
+Notes
+********************************/
+
+/********************************
+OneWire & DS18B20 temp sesnor setup
+********************************/
+
+const int      MAXRETRY          = 4;
+const uint32_t msSAMPLE_INTERVAL = 2500;
+const uint32_t msMETRIC_PUBLISH  = 30000;
+
+DS18B20  ds18b20(D2, true); //Sets Pin D3 for Water Temp Sensor and
+                            // this is the only sensor on bus
+char     szInfo[64];
+double   celsius;
+double   fahrenheit;
+uint32_t msLastMetric;
+uint32_t msLastSample;
+
+
 void setup()   {
+/********************************
+OneWire & DS18B20 temp sesnor setup
+********************************/
+    Time.zone(-7);
+    Particle.variable("hiveTemp", fahrenheit);
 
     //MessageBoard m = new MessageBoard();
-
     Serial.begin(38400);
 
     // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
@@ -87,13 +116,14 @@ void setup()   {
   						// by the SCALE parameter (not set yet)
 //106741.044776119402985
 //11149
-//-10.250 = 13.7
+//-10250 = 13.7
+//-10350
 //-10450 = 13.4
 //-10550 = 13.3
 //-10650 = 13.2
 //-10750 = 13.1
 //-10
-    scale.set_scale(-10350.f);                      // 2240.f this value is obtained by calibrating the scale with known weights; see the README for details
+    scale.set_scale(-10000.f);                      // 2240.f this value is obtained by calibrating the scale with known weights; see the README for details
     //scale.set_scale();
     //  scale.tare();				        // reset the scale to 0
 
@@ -118,10 +148,19 @@ void setup()   {
 
 
 void loop() {
+//Temp Section
+  if (millis() - msLastSample >= msSAMPLE_INTERVAL){
+    getTemp();
+  }
+
+  if (millis() - msLastMetric >= msMETRIC_PUBLISH){
+      SetReminder("Publishing now.");
+    publishData();
+  }
+dotTimer(3500);
+
 //String scaleaverage = scale.read_average(20);
-
-
-  SetReminder("Running");
+  SetReminder("Current Weight");
   ClearMessage(1);
   ClearMessage(2);
   ClearMessage(3);
@@ -135,51 +174,27 @@ showMsg(1, MyreadAverage);
 display.println(scale.get_units(10), 1);
 
 scale.power_down();
-
-String Mydots;
-int Mycounter = 1;
-
-ClearMessage(3);
-while(Mycounter <= 9){
-  Mydots += "\t";
-  showMsg(3,Mydots);
-  Mycounter++;
-  delay(75);
-  }
-/*  showMsg(3,"\t");
-  delay(50);
-  showMsg(3,"\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t\t\t\t\t");
-  delay(50);
-  showMsg(3,"\t\t\t\t\t\t\t\t\t");
-  */
+dotTimer(2500);
 scale.power_up();
   delay(1000);
-/*
-String Mydots;
-int Mycounter = 1;
-ClearMessage(3);
-while(Mycounter <= 9){
-  Mydots += "\t";
-  showMsg(3,Mydots);
-  Mycounter++;
-  delay(500);
-  }
-*/
+
 analogRead(A4);
 
 
+}
+void dotTimer(int myDelay){
+String myDots;
+int myCounter = 9;
+myDelay = myDelay/myCounter;
+
+ClearMessage(3);
+while(myCounter > 0){
+  myDots += "\t";
+  showMsg(3,myDots);
+  myCounter--;
+
+  delay(myDelay);
+  }
 }
 
 void showMsg(int n, String message) {
@@ -219,4 +234,45 @@ int SetSurf(String message) {
 int Clear(String message) {
     display.clearDisplay();
     display.display();
+}
+
+/****************
+Hive Temp reading functions
+*****************/
+void publishData(){
+  if(!ds18b20.crcCheck()){      //make sure the value is correct
+    return;
+  }
+  sprintf(szInfo, "%2.2f", fahrenheit);
+  Particle.publish("dsTmp", szInfo, PRIVATE);
+  msLastMetric = millis();
+}
+
+void getTemp(){
+  float _temp;
+  int   i = 0;
+  String fh = "nothing";
+  ClearMessage(1);
+  showMsg(1,fh);
+
+  do {
+    _temp = ds18b20.getTemperature();
+  } while (!ds18b20.crcCheck() && MAXRETRY > i++);
+
+  if (i < MAXRETRY) {
+    celsius = _temp;
+    fahrenheit = ds18b20.convertToFahrenheit(_temp);
+        SetReminder("GettingTemp");
+        fh = String(fahrenheit);
+        ClearMessage(1);
+        ClearMessage(2);
+        ClearMessage(3);
+        showMsg(1,fh);
+  }
+  else {
+    celsius = fahrenheit = NAN;
+    ClearMessage(1);
+    showMsg(1,"Invalid reading");
+  }
+  msLastSample = millis();
 }
