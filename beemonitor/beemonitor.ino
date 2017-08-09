@@ -1,7 +1,7 @@
 // This #include statement was automatically added by the Particle IDE.
 #include "Adafruit_SSD1306.h"
 #include "HX711ADC.h"
-#include <DS18B20.h>
+#include "DS18.h"
 #include <math.h>
 
 /*********************************************************************
@@ -21,7 +21,7 @@ Photon Wireing Guide
 D0 -->OLED SDA
 D1 -->OLED SCL
 D4 -->OLDED Reset not actually used
-D3 -->DS18B20
+D2 -->DS18B20 Yellow wire
 A0 -->HX711 SCK
 A1 -->HX711 DT
 
@@ -52,18 +52,8 @@ Notes
 /********************************
 OneWire & DS18B20 temp sesnor setup
 ********************************/
+DS18 sensor(D2);
 
-const int      MAXRETRY          = 4;
-const uint32_t msSAMPLE_INTERVAL = 2500;
-const uint32_t msMETRIC_PUBLISH  = 30000;
-
-DS18B20  ds18b20(D2, true); //Sets Pin D3 for Water Temp Sensor and
-                            // this is the only sensor on bus
-char     szInfo[64];
-double   celsius;
-double   fahrenheit;
-uint32_t msLastMetric;
-uint32_t msLastSample;
 
 
 void setup()   {
@@ -71,8 +61,6 @@ void setup()   {
 OneWire & DS18B20 temp sesnor setup
 ********************************/
     Time.zone(-7);
-    Particle.variable("hiveTemp", fahrenheit);
-
     //MessageBoard m = new MessageBoard();
     Serial.begin(38400);
 
@@ -127,36 +115,45 @@ OneWire & DS18B20 temp sesnor setup
     //scale.set_scale();
     //  scale.tare();				        // reset the scale to 0
 
-    Serial.println("After setting up the scale:");
-
-//    display.print("read: \t\t");
-//    display.println(scale.read());                 // print a raw reading from the ADC
-
-//    display.print("read average: \t\t");
-//    display.println(scale.read_average(20));       // print the average of 20 readings from the ADC
-
-//    display.print("get value: \t\t");
-//    display.println(scale.get_value(5));		// print the average of 5 readings from the ADC minus the tare weight, set with tare()
-
-//    display.print("get units: \t\t");
-//    display.println(scale.get_units(5), 1);        // print the average of 5 readings from the ADC minus tare weight, divided
-  						// by the SCALE parameter set with set_scale
-
-//    Serial.println("Readings:");
-
 }
 
 
 void loop() {
 //Temp Section
-  if (millis() - msLastSample >= msSAMPLE_INTERVAL){
-    getTemp();
-  }
+// Read the next available 1-Wire temperature sensor
+if (sensor.read()) {
+  // Do something cool with the temperature
+  String displayTemp = String("Temp %.2f F ", sensor.fahrenheit());
+  SetReminder("CurrentTemp");
+  ClearMessage(1);
+  showMsg(1, displayTemp);
+  dotTimer(1000);
+  Clear("all");
+  display.println("Temperature %.2f C %.2f F ", sensor.celsius(), sensor.fahrenheit());
+  Serial.printf("Temperature %.2f C %.2f F ", sensor.celsius(), sensor.fahrenheit());
+  Particle.publish("temperature", String(sensor.fahrenheit()), PRIVATE);
 
-  if (millis() - msLastMetric >= msMETRIC_PUBLISH){
-      SetReminder("Publishing now.");
-    publishData();
+  // Additional info useful while debugging
+  printDebugInfo();
+
+// If sensor.read() didn't return true you can try again later
+// This next block helps debug what's wrong.
+// It's not needed for the sensor to work properly
+} else {
+  // Once all sensors have been read you'll get searchDone() == true
+  // Next time read() is called the first sensor is read again
+  if (sensor.searchDone()) {
+    Serial.println("No more addresses.");
+    // Avoid excessive printing when no sensors are connected
+    delay(250);
+
+  // Something went wrong
+  } else {
+    printDebugInfo();
   }
+}
+Serial.println();
+
 dotTimer(3500);
 
 //String scaleaverage = scale.read_average(20);
@@ -239,40 +236,37 @@ int Clear(String message) {
 /****************
 Hive Temp reading functions
 *****************/
-void publishData(){
-  if(!ds18b20.crcCheck()){      //make sure the value is correct
-    return;
+void printDebugInfo() {
+  // If there's an electrical error on the 1-Wire bus you'll get a CRC error
+  // Just ignore the temperature measurement and try again
+  if (sensor.crcError()) {
+    Serial.print("CRC Error ");
   }
-  sprintf(szInfo, "%2.2f", fahrenheit);
-  Particle.publish("dsTmp", szInfo, PRIVATE);
-  msLastMetric = millis();
-}
 
-void getTemp(){
-  float _temp;
-  int   i = 0;
-  String fh = "nothing";
-  ClearMessage(1);
-  showMsg(1,fh);
-
-  do {
-    _temp = ds18b20.getTemperature();
-  } while (!ds18b20.crcCheck() && MAXRETRY > i++);
-
-  if (i < MAXRETRY) {
-    celsius = _temp;
-    fahrenheit = ds18b20.convertToFahrenheit(_temp);
-        SetReminder("GettingTemp");
-        fh = String(fahrenheit);
-        ClearMessage(1);
-        ClearMessage(2);
-        ClearMessage(3);
-        showMsg(1,fh);
+  // Print the sensor type
+  const char *type;
+  switch(sensor.type()) {
+    case WIRE_DS1820: type = "DS1820"; break;
+    case WIRE_DS18B20: type = "DS18B20"; break;
+    case WIRE_DS1822: type = "DS1822"; break;
+    case WIRE_DS2438: type = "DS2438"; break;
+    default: type = "UNKNOWN"; break;
   }
-  else {
-    celsius = fahrenheit = NAN;
-    ClearMessage(1);
-    showMsg(1,"Invalid reading");
-  }
-  msLastSample = millis();
+  Serial.print(type);
+
+  // Print the ROM (sensor type and unique ID)
+  uint8_t addr[8];
+  sensor.addr(addr);
+  Serial.printf(
+    " ROM=%02X%02X%02X%02X%02X%02X%02X%02X",
+    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5], addr[6], addr[7]
+  );
+
+  // Print the raw sensor data
+  uint8_t data[9];
+  sensor.data(data);
+  Serial.printf(
+    " data=%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]
+  );
 }
