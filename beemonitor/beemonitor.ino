@@ -129,7 +129,8 @@ if (sensor.read()) {
   showMsg(1, displayTemp);
   dotTimer(1000);
   Clear("all");
-  display.println("Temperature %.2f C %.2f F ", sensor.celsius(), sensor.fahrenheit());
+  display.printf("Temperature %.2f C %.2f F ", sensor.celsius(), sensor.fahrenheit());
+  display.printf(displayTemp);
   Serial.printf("Temperature %.2f C %.2f F ", sensor.celsius(), sensor.fahrenheit());
   Particle.publish("temperature", String(sensor.fahrenheit()), PRIVATE);
 
